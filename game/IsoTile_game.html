@@ -1,0 +1,2222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>IsoTile - Quest Update</title>
+    <style>
+        body {
+            background-color: #1a1a1a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+            font-family: monospace;
+            color: white;
+        }
+
+        canvas {
+            image-rendering: pixelated; 
+            image-rendering: -moz-crisp-edges;
+            image-rendering: crisp-edges;
+            
+            width: 100%;
+            max-width: 2560px;
+            aspect-ratio: 16 / 9;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            background: #87CEEB;
+            cursor: crosshair;
+        }
+
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.8);
+            padding: 10px;
+            border: 2px solid white;
+            pointer-events: none;
+        }
+        
+        #ui button { pointer-events: auto; }
+        
+        button {
+            cursor: pointer;
+            padding: 8px 12px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="gameCanvas" width="640" height="360"></canvas>
+
+<script>
+    /** CONFIGURATION */
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d', { alpha: false }); 
+    ctx.imageSmoothingEnabled = false;
+
+    canvas.gameOver = false;
+    
+    // --- ASSETS ---
+    const imgTile 		= new Image();  imgTile.src 	    = './assets/sprites/sprite_tile.png';
+  	const imgSand 		= new Image();  imgSand.src 	    = './assets/sprites/sprite_desertground.png';
+  	const imgForest 	= new Image();  imgForest.src 	    = './assets/sprites/sprite_jungleground.png';
+  	const imgRockGround = new Image();  imgRockGround.src 	= './assets/sprites/sprite_rockground.png';
+    
+  	const imgTilledTile = new Image();  imgTilledTile.src 	= './assets/sprites/sprite_tilledtile.png';
+    
+    const imgWeat       = new Image();  imgWeat.src 	    = './assets/sprites/sprite_weat.png';
+    const imgTree 		= new Image();  imgTree.src 	    = './assets/sprites/sprite_tree.png';
+    const imgRocks 		= new Image(); 	imgRocks.src 	    = './assets/sprites/sprite_rocks.png';
+    const imgBigRock 	= new Image(); 	imgBigRock.src 	    = './assets/sprites/sprite_rock.png';
+    
+    const imgLeaf		= new Image(); 	imgLeaf.src 	    = './assets/sprites/sprite_leaf.png';
+    const imgBoat 		= new Image(); 	imgBoat.src 	    = './assets/sprites/sprite_boat.png';
+    const imgBuilding 	= new Image(); 	imgBuilding.src     = './assets/sprites/sprite_generator.png';
+    
+    const imgWeatSeeds  = new Image();  imgWeatSeeds.src 	= './assets/icons/icon_weatseeds.png';
+    const imgWeatIcon   = new Image();  imgWeatIcon.src 	= './assets/icons/icon_weat.png';
+    const imgStone 	    = new Image(); 	imgStone.src 	    = './assets/icons/icon_stone.png';
+    const imgWood 		= new Image(); 	imgWood.src 	    = './assets/icons/icon_wood.png';
+
+    const imgAxe 		= new Image(); 	imgAxe.src 		    = './assets/icons/icon_axe.png';
+    const imgHoe 		= new Image(); 	imgHoe.src 		    = './assets/icons/icon_hoe.png';
+  	const imgShovel 	= new Image(); 	imgShovel.src 		= './assets/icons/icon_shovel.png';
+    const imgPickaxe 	= new Image(); 	imgPickaxe.src 	    = './assets/icons/icon_pickaxe.png';
+
+    // Dimensions
+    const TILE_WIDTH                = 32;
+    const TILE_HEIGHT               = 16; 
+    const RENDER_DISTANCE           = 11; 	// OPTIMIZED: Reduced from 22 to save render power
+    const ZOOM_LEVEL                = 2;    		// OPTIMIZED: Zoom in slightly to render less area
+    
+    // --- CAMERA SETTINGS ---
+    const CAM_TRIGGER_MARGIN        = 15; 
+    const CAM_STOP_MARGIN           = 16;        
+    const CAM_ACCEL                 = 0.2;              
+    const CAM_MAX_SPEED             = 4.0;          
+    const CAM_FRICTION              = 0.85;          
+    
+    // Visuals
+    const GRASS_HEIGHT              = 4;
+    const PLAYER_FLOAT_BASE         = 10; 
+    const TREE_OFFSET_X             = -20; 
+    
+    // Colors
+    const C_GRASS_TOP               = '#4caf50';
+    const C_GRASS_SIDE              = '#388e3c'; 
+    const C_GRASS_OUTLINE           = '#1b5e20';
+    const C_DIRT                    = '#795548';          
+    const C_DIRT_DARK               = '#5d4037';   
+    const C_WATER                   = '#29b6f6';
+    const C_FOAM                    = '#B3E5FC';
+    
+    const C_PLAYER_MAIN             = '#333333'; 
+    const C_PLAYER_SHADE            = '#000000'; 
+    const C_PLAYER_HIGH             = '#666666'; 
+
+    // --- QUEST SYSTEM VARIABLES ---
+    let activeQuests = [];
+    let questNotifications = [];
+
+    // State
+    let camera = { 
+        x: 0, 
+        y: 0, 
+        vx: 0, 
+        vy: 0,
+        panningX: false, 
+        panningY: false  
+    };
+
+    let player = {
+        gridX: 0, gridY: 0,
+        worldX: 0, worldY: 0, 
+        path: [],
+        speed: 2.5,
+        inBoat: false,
+        pendingAction: null
+    };
+
+    let treeStates = {};
+    let rockStates = {}; 
+    let tileStates = {};
+
+    let ignoreTiles = {};
+
+    let particles = []; 
+    let worldObjects = {}; 
+    let hoveredGrid = null; 
+    
+    // --- INVENTORY SYSTEM ---
+    const INV_TOTAL_SLOTS = 32;
+    const HOTBAR_SLOTS = 8;
+    const SLOT_SIZE = 24; 
+    const SLOT_PADDING = 4;
+    
+    let inventory = {
+        open: false,
+        selected: 0, 
+        slots: new Array(INV_TOTAL_SLOTS).fill(null),
+        dragItem: null,     
+        dragIndex: -1       
+    };
+    
+    // UPDATED RECIPES FOR QUEST CHAIN
+    const RECIPES = [
+        { 
+            name: 'Axe', 
+            type: 'axe', 
+            outCount: 1, 
+            req: [ { type: 'wood', count: 3 }, { type: 'stone', count: 2 } ], 
+            unlocked: true // Starter Recipe
+        },
+        { 
+            name: 'Hoe', 
+            type: 'hoe', 
+            outCount: 1, 
+            req: [ { type: 'wood', count: 3 }, { type: 'stone', count: 1 } ], 
+            unlocked: false 
+        },
+	  	{ 
+            name: 'Shovel', 
+            type: 'shovel', 
+            outCount: 1, 
+            req: [ { type: 'wood', count: 2 }, { type: 'stone', count: 3 } ], 
+            unlocked: false 
+        },
+        { 
+            name: 'Pickaxe', 
+            type: 'pickaxe', 
+            outCount: 1, 
+            req: [ { type: 'wood', count: 3 }, { type: 'stone', count: 3 } ],
+            unlocked: false // Locked initially
+        },
+        { 
+            name: 'Boat', 
+            type: 'boat', 
+            outCount: 1, 
+            req: [ { type: 'wood', count: 5 } ],
+            unlocked: true // Default unlocked for mobility
+        },
+        { 
+            name: 'Generator', 
+            type: 'generator', 
+            outCount: 1, 
+            req: [ { type: 'wood', count: 50 }, { type: 'stone', count: 50 } ], // Updated cost
+            unlocked: false // Locked initially
+        }
+    ];
+
+    let mouse = { x: 0, y: 0, down: false };
+    let drops = []; 
+
+    // --- QUEST LOGIC ---
+
+    function initQuests() {
+        addQuest({
+            id: 'q1_axe',
+            text: "Craft an Axe",
+            type: 'craft',
+            target: 'axe',
+            req: 1,
+            current: 0,
+            state: 'active',
+            fade: 1.0,
+            reward: () => {
+                unlockRecipe('pickaxe');
+                unlockRecipe('generator');
+                
+                // Start Final Quest
+                addQuest({
+                    id: 'q4_generator',
+                    text: "Place Generator", // Changed text to be clear
+                    type: 'place',              // Changed type to 'place' so crafting doesn't auto-complete
+                    target: 'generator',
+                    req: 1,
+                    current: 0,
+                    state: 'active',
+                    fade: 1.0,
+                    reward: () => {
+                        questNotifications.push({ text: "You have been commanded to survive.", life: 300 });
+                        unlockRecipe('hoe');
+                        inventory.slots[8] = { type: 'weatseeds', count: 5 };
+                    }
+                });
+                addQuest({
+                    id: 'q3_gather',
+                    text: "Gather Resources",
+                    type: 'gather_multi',
+                    reqs: [
+                        { type: 'wood', req: 50, current:  countItem('wood')},
+                        { type: 'stone', req: 50, current: countItem('stone') }
+                    ],
+                    state: 'active',
+                    fade: 1.0,
+                    reward: () => {
+                        
+                    }
+                });
+            }
+        });
+    }
+
+    function addQuest(questObj) {
+        activeQuests.push(questObj);
+        questNotifications.push({ text: "Quest Unlocked!", life: 120 });
+        playSound('audio_test.wav', false, 1.5);
+    }
+
+    function unlockRecipe(type) {
+        let r = RECIPES.find(x => x.type === type);
+        if(r) r.unlocked = true;
+        questNotifications.push({ text: "Recipe Unlocked!", life: 120 });
+    }
+
+    function checkQuestProgress(actionType, itemType, amount) {
+        for(let q of activeQuests) {
+            if(q.state !== 'active') continue;
+
+            // Crafting / Placing Quests
+            if(q.type === actionType && q.target === itemType) {
+                q.current += amount;
+                if(q.current >= q.req) {
+                    q.current = q.req;
+                    completeQuest(q);
+                }
+            }
+
+            // Multi-Gather Quest (50/50)
+            if(q.type === 'gather_multi' && actionType === 'gather') {
+                let subReq = q.reqs.find(r => r.type === itemType);
+                if(subReq) {
+                    subReq.current += amount;
+                    if(subReq.current > subReq.req) subReq.current = subReq.req;
+                    
+                    // Check if all parts are done
+                    let allDone = q.reqs.every(r => r.current >= r.req);
+                    if(allDone) completeQuest(q);
+                }
+            }
+        }
+    }
+
+    function completeQuest(q) {
+        q.state = 'complete';
+        playSound('audio_test.wav', false, 2.0); // Victory sound
+        
+        // Delay fade out to show completion
+        setTimeout(() => {
+            q.state = 'fading';
+            if(q.reward) q.reward();
+        }, 1000);
+    }
+
+    /** * ---------------------------------------------------------
+     * PIXEL ALPHABET LIBRARY (3x5 Font)
+     * ---------------------------------------------------------
+     */
+    const font3x5 = {
+        'A': [0,1,0, 1,0,1, 1,1,1, 1,0,1, 1,0,1],
+        'B': [1,1,0, 1,0,1, 1,1,0, 1,0,1, 1,1,0],
+        'C': [0,1,1, 1,0,0, 1,0,0, 1,0,0, 0,1,1],
+        'D': [1,1,0, 1,0,1, 1,0,1, 1,0,1, 1,1,0],
+        'E': [1,1,1, 1,0,0, 1,1,0, 1,0,0, 1,1,1],
+        'F': [1,1,1, 1,0,0, 1,1,0, 1,0,0, 1,0,0],
+        'G': [0,1,1, 1,0,0, 1,0,1, 1,0,1, 0,1,1],
+        'H': [1,0,1, 1,0,1, 1,1,1, 1,0,1, 1,0,1],
+        'I': [1,1,1, 0,1,0, 0,1,0, 0,1,0, 1,1,1],
+        'J': [0,0,1, 0,0,1, 0,0,1, 1,0,1, 0,1,0],
+        'K': [1,0,1, 1,0,1, 1,1,0, 1,0,1, 1,0,1],
+        'L': [1,0,0, 1,0,0, 1,0,0, 1,0,0, 1,1,1],
+        'M': [1,0,1, 1,1,1, 1,0,1, 1,0,1, 1,0,1],
+        'N': [1,1,0, 1,0,1, 1,0,1, 1,0,1, 1,0,1],
+        'O': [1,1,1, 1,0,1, 1,0,1, 1,0,1, 1,1,1],
+        'P': [1,1,0, 1,0,1, 1,1,0, 1,0,0, 1,0,0],
+        'Q': [0,1,0, 1,0,1, 1,0,1, 0,1,0, 0,0,1],
+        'R': [1,1,0, 1,0,1, 1,1,0, 1,0,1, 1,0,1],
+        'S': [0,1,1, 1,0,0, 0,1,0, 0,0,1, 1,1,0],
+        'T': [1,1,1, 0,1,0, 0,1,0, 0,1,0, 0,1,0],
+        'U': [1,0,1, 1,0,1, 1,0,1, 1,0,1, 0,1,0],
+        'V': [1,0,1, 1,0,1, 1,0,1, 1,0,1, 0,1,0],
+        'W': [1,0,1, 1,0,1, 1,0,1, 1,1,1, 1,0,1],
+        'X': [1,0,1, 1,0,1, 0,1,0, 1,0,1, 1,0,1],
+        'Y': [1,0,1, 1,0,1, 0,1,0, 0,1,0, 0,1,0],
+        'Z': [1,1,1, 0,0,1, 0,1,0, 1,0,0, 1,1,1],
+        '0': [0,1,0, 1,0,1, 1,0,1, 1,0,1, 0,1,0],
+        '1': [0,1,0, 1,1,0, 0,1,0, 0,1,0, 1,1,1],
+        '2': [1,1,0, 0,0,1, 0,1,0, 1,0,0, 1,1,1],
+        '3': [1,1,0, 0,0,1, 0,1,0, 0,0,1, 1,1,0],
+        '4': [1,0,0, 1,0,0, 1,0,1, 1,1,1, 0,0,1],
+        '5': [1,1,1, 1,0,0, 1,1,0, 0,0,1, 1,1,0],
+        '6': [0,1,0, 1,0,0, 1,1,0, 1,0,1, 0,1,0],
+        '7': [1,1,1, 0,0,1, 0,0,1, 0,1,0, 0,1,0],
+        '8': [0,1,0, 1,0,1, 0,1,0, 1,0,1, 0,1,0],
+        '9': [0,1,0, 1,0,1, 0,1,1, 0,0,1, 0,1,0],
+        ':': [0,0,0, 0,1,0, 0,0,0, 0,1,0, 0,0,0],
+        '.': [0,0,0, 0,0,0, 0,0,0, 0,0,0, 0,1,0],
+        '/': [0,0,1, 0,0,1, 0,1,0, 1,0,0, 1,0,0],
+        '[': [1,1,0, 1,0,0, 1,0,0, 1,0,0, 1,1,0],
+        ']': [0,1,1, 0,0,1, 0,0,1, 0,0,1, 0,1,1],
+        '!': [1,0,0, 1,0,0, 1,0,0, 0,0,0, 1,0,0]
+    };
+
+    function drawPixelText(str, x, y, color = '#FFF', scale = 1) {
+        str = str.toString().toUpperCase();
+        let curX = x;
+        ctx.fillStyle = color;
+        for (let i = 0; i < str.length; i++) {
+            let char = str[i];
+            if (char === ' ') {
+                curX += 4 * scale;
+                continue;
+            }
+            let data = font3x5[char];
+            if (!data) data = font3x5['.']; // Fallback
+            
+            for (let r = 0; r < 5; r++) {
+                for (let c = 0; c < 3; c++) {
+                    if (data[r * 3 + c]) {
+                        ctx.fillRect(curX + (c * scale), y + (r * scale), scale, scale);
+                    }
+                }
+            }
+            curX += 4 * scale; 
+        }
+    }
+
+	 /** * ---------------------------------------------------------
+	 * 1. PERLIN NOISE IMPLEMENTATION
+	 * (Standard Permutation Table Implementation)
+	 * ---------------------------------------------------------
+	 */
+	const Perlin = {
+		perm: (() => {
+			const p = [];
+			for (let i = 0; i < 256; i++) p[i] = Math.floor(Math.random() * 256);
+			const perm = [];
+			for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+			return perm;
+		})(),
+		fade: function(t) { return t * t * t * (t * (t * 6 - 15) + 10); },
+		lerp: function(t, a, b) { return a + t * (b - a); },
+		grad: function(hash, x, y, z) {
+			const h = hash & 15;
+			const u = h < 8 ? x : y, v = h < 4 ? y : (h === 12 || h === 14 ? x : z);
+			return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v);
+		},
+		noise: function(x, y, z = 0) {
+			const X = Math.floor(x) & 255, Y = Math.floor(y) & 255, Z = Math.floor(z) & 255;
+			x -= Math.floor(x); y -= Math.floor(y); z -= Math.floor(z);
+			const u = this.fade(x), v = this.fade(y), w = this.fade(z);
+			const A = this.perm[X] + Y, AA = this.perm[A] + Z, AB = this.perm[A + 1] + Z,
+				  B = this.perm[X + 1] + Y, BA = this.perm[B] + Z, BB = this.perm[B + 1] + Z;
+			return this.lerp(w, this.lerp(v, this.lerp(u, this.grad(this.perm[AA], x, y, z),
+				this.grad(this.perm[BA], x - 1, y, z)),
+				this.lerp(u, this.grad(this.perm[AB], x, y - 1, z),
+				this.grad(this.perm[BB], x - 1, y - 1, z))),
+				this.lerp(v, this.lerp(u, this.grad(this.perm[AA + 1], x, y, z - 1),
+				this.grad(this.perm[BA + 1], x - 1, y, z - 1)),
+				this.lerp(u, this.grad(this.perm[AB + 1], x, y - 1, z - 1),
+				this.grad(this.perm[BB + 1], x - 1, y - 1, z - 1))));
+		}
+	};
+
+	/** * ---------------------------------------------------------
+	 * 2. CONFIGURATION & PREFABS
+	 * ---------------------------------------------------------
+	 */
+
+	// Use a Map for O(1) lookup speed instead of looping through arrays
+	// Example: A small stone path (Biome ID 4) leading to a specific tree on Grass (Biome ID 2)
+	// This data could be loaded from a .json file or an API
+  
+	const levelDataJSON = [
+		// A vertical path of stone (ID: 4)
+		{ "x": 1, "y": 0, "type": 4, "hasTree": false },
+		{ "x": 1, "y": 2, "type": 4, "hasTree": false },
+		{ "x": 1, "y": 2, "type": 4, "hasTree": false },
+
+		// A grass patch (ID: 2) at the end with a forced tree
+		{ "x": 10, "y": 13, "type": 2, "hasTree": true },
+
+		// A specific rock (frame 2) next to the path
+		{ "x": 11, "y": 12, "type": 2, "rockData": { "hasRock": true, "frame": 2 } }
+	];
+  
+	const prefabs = new Map();
+
+	// Configuration for easy biome addition
+	const BIOME_TYPES = {
+		WATER:  { id: 0, name: 'water',  treeChance: 0.0,  minHeight: -1.0 },
+		SAND:   { id: 1, name: 'sand',   treeChance: 0.0, minHeight: -0.2 }, // Beach
+		GRASS:  { id: 2, name: 'grass',  treeChance: 0.01,  minHeight: -0.1 }, // Plains
+		FOREST: { id: 3, name: 'forest', treeChance: 0.5, minHeight: 0.3 },  // High vegetation
+		ROCK:   { id: 4, name: 'rock',   treeChance: 0.0,  minHeight: 0.6 }   // Mountains
+	};
+  
+  	loadPrefab(levelDataJSON);
+  
+  	/**
+	 * ---------------------------------------------------------
+	 * AVERAGED MINIMAP SYSTEM
+	 * ---------------------------------------------------------
+	 */
+
+	// Reuse your existing color map
+	const MM_COLORS = {
+		0: '#2980b9', // Water
+		1: '#f39c12', // Sand
+		2: '#27ae60', // Grass
+		3: '#145a32', // Forest
+		4: '#7f8c8d'  // Rock
+	};
+
+	function getDominantTile(startX, startY) {
+		const counts = {};
+		let maxCount = 0;
+		let dominantType = 0; // Default
+
+		// Check the 2x2 grid (4 tiles total)
+		for (let x = 0; x < 2; x++) {
+			for (let y = 0; y < 2; y++) {
+				let type = getTileAt(startX + x, startY + y);
+
+				// Increment count for this type
+				counts[type] = (counts[type] || 0) + 1;
+
+				// Check if this is the new winner
+				if (counts[type] > maxCount) {
+					maxCount = counts[type];
+					dominantType = type;
+				}
+			}
+		}
+		return dominantType;
+	}
+
+	function drawMiniMap(ctx, mmPos, playerPos) {
+		// Settings
+		const worldCoverage = 80;   // Total world tiles to cover
+		const chunkSize = 2;        // We group 2x2 tiles into 1 minimap dot
+		const dotPixelSize = 2;     // The visual size of that dot on screen (2x2 pixels)
+
+		// Calculated size of the map on screen:
+		// (80 tiles / 2 per chunk) * 2 pixels per dot = 80 pixels wide
+		const mapWidthPixels = (worldCoverage / chunkSize) * dotPixelSize;
+
+		ctx.save();
+
+		// 1. Draw Background
+		ctx.globalAlpha = 0.8;
+		ctx.fillStyle = '#000000';
+		ctx.fillRect(mmPos.x, mmPos.y, mapWidthPixels, mapWidthPixels);
+
+		// 2. Determine start position (Top-Left of the visible area)
+		// We align to even numbers so chunks don't "jitter" when moving
+		let startWorldX = Math.floor((playerPos.x - worldCoverage / 2) / 2) * 2;
+		let startWorldY = Math.floor((playerPos.y - worldCoverage / 2) / 2) * 2;
+
+		// 3. Loop through the CHUNKS (not individual tiles)
+		const chunksAcross = worldCoverage / chunkSize; // 40 loops
+
+		for (let x = 0; x < chunksAcross; x++) {
+			for (let y = 0; y < chunksAcross; y++) {
+
+				// The actual world coordinates for the top-left of this 2x2 chunk
+				let chunkWorldX = startWorldX + (x * chunkSize);
+				let chunkWorldY = startWorldY + (y * chunkSize);
+
+				// Get the averaged/dominant tile type
+				let tileID = getDominantTile(chunkWorldX, chunkWorldY);
+
+				// Draw the dot
+				ctx.fillStyle = MM_COLORS[tileID] || '#000000';
+				ctx.fillRect(
+					mmPos.x + (x * dotPixelSize), 
+					mmPos.y + (y * dotPixelSize), 
+					dotPixelSize, 
+					dotPixelSize
+				);
+			}
+		}
+
+		// 4. Draw Player Marker (Center)
+		ctx.globalAlpha = 1.0; 
+		ctx.fillStyle = '#ff0000'; // Red
+
+		// Center is half the pixel width, minus half the marker size (to center exactly)
+		let center = (mapWidthPixels / 2) - 1; 
+		ctx.fillRect(mmPos.x + center, mmPos.y + center, 2, 2);
+
+		// 5. Border
+		ctx.strokeStyle = '#ffffff';
+		ctx.lineWidth = 1;
+		ctx.strokeRect(mmPos.x, mmPos.y, mapWidthPixels, mapWidthPixels);
+
+		ctx.restore();
+	}
+
+	/** * ---------------------------------------------------------
+	 * 3. GENERATION LOGIC
+	 * ---------------------------------------------------------
+	 */
+
+	// Helper to keep randomness deterministic if needed
+	function pseudoRandom(x, y) {
+		let dot = x * 12.9898 + y * 78.233;
+		let sin = Math.sin(dot) * 43758.5453;
+		return sin - Math.floor(sin);
+	}
+
+	// Generate a key string for the map
+	function getCoordKey(x, y) {
+		return `${x},${y}`;
+	}
+
+	// Determines the Biome object based on Perlin Noise
+	function getBiomeAt(x, y) {
+		// Zoom factor: Lower numbers = larger biomes
+		const scale = 0.05; 
+		const noiseVal = Perlin.noise(x * scale, y * scale, 0);
+
+		// Default to Water
+		let selectedBiome = BIOME_TYPES.WATER;
+
+		// Check thresholds (order matters: check highest to lowest or iterate keys)
+		if (noiseVal > BIOME_TYPES.ROCK.minHeight)   selectedBiome = BIOME_TYPES.ROCK;
+		else if (noiseVal > BIOME_TYPES.FOREST.minHeight) selectedBiome = BIOME_TYPES.FOREST;
+		else if (noiseVal > BIOME_TYPES.GRASS.minHeight)  selectedBiome = BIOME_TYPES.GRASS;
+		else if (noiseVal > BIOME_TYPES.SAND.minHeight)   selectedBiome = BIOME_TYPES.SAND;
+
+		return selectedBiome;
+	}
+
+	// Returns the Tile ID/Name
+	function getTileAt(x, y) {
+		// 1. Check Prefabs First
+		const key = getCoordKey(x, y);
+		if (prefabs.has(key)) {
+			return prefabs.get(key).type; // Returns the forced tile type
+		}
+
+		// 2. Procedural Generation
+		const biome = getBiomeAt(x, y);
+		return biome.id; // Or return biome.name if you prefer strings
+	}
+
+	function isWater(x, y) {
+		// 1. Check Prefab
+		const key = getCoordKey(x, y);
+		if (prefabs.has(key)) return prefabs.get(key).type === BIOME_TYPES.WATER.id;
+
+		// 2. Check Biome
+		return getBiomeAt(x, y).name === 'water';
+	}
+
+	function getTreeAt(x, y) {
+    	if (ignoreTiles[`${x},${y}`] && ignoreTiles[`${x},${y}`].removed === true) {return false;}
+	  
+		// 1. Check Prefab override
+		const key = getCoordKey(x, y);
+		if (prefabs.has(key)) {
+			const p = prefabs.get(key);
+			// If prefab explicitly defines hasTree, return that, otherwise false
+			return p.hasTree === true;
+		}
+
+		// 2. Procedural Logic
+		if (isWater(x, y)) return false;
+
+		const biome = getBiomeAt(x, y);
+
+		// Use Perlin for tree density noise instead of pure random for better clustering
+		// Or use pseudoRandom if you want scattered trees
+		let rand = pseudoRandom(x, y);
+
+		// Only spawn if random value is less than the biome's tree chance
+		return rand < biome.treeChance; 
+	}
+
+	function getBigRockAt(x, y) {
+        
+        if (ignoreTiles[`${x},${y}`] && ignoreTiles[`${x},${y}`].removed === true) {return false;}
+            
+		// Prefab check
+		const key = getCoordKey(x, y);
+		if (prefabs.has(key)) return prefabs.get(key).hasBigRock === true;
+
+		// Procedural
+		if (isWater(x, y) || getTreeAt(x, y)) return false;
+
+		// Big rocks mainly in Rock Biome or rare in others
+		let threshold = 0.98; 
+		if (getBiomeAt(x,y).name === 'rock') threshold = 0.85; // More rocks in mountains
+
+		let rand = pseudoRandom(x * 12.3, y * 45.6);
+		return rand > threshold; 
+	}
+
+	function getRockAt(x, y) {
+
+        if (ignoreTiles[`${x},${y}`] && ignoreTiles[`${x},${y}`].removed === true) {return false;}
+
+        // Prefab check
+		const key = getCoordKey(x, y);
+		if (prefabs.has(key)) {
+			if (prefabs.get(key).rockData) return prefabs.get(key).rockData;
+			return null;
+		}
+
+		// Procedural
+		if (isWater(x, y) || getTreeAt(x, y) || getBigRockAt(x, y)) return null;
+
+		let spawnChance = pseudoRandom(x * 7.13, y * 3.55);
+
+		// Higher small rock chance in rocky biomes
+		let threshold = 0.90;
+		if (getBiomeAt(x,y).name === 'rock') threshold = 0.50;
+
+		if (spawnChance > threshold) { 
+			let variantRand = pseudoRandom(x + 100, y + 100);
+			let frame = Math.floor(variantRand * 3); 
+			return { hasRock: true, frame: frame };
+		}
+		return null;
+	}
+
+	/** * ---------------------------------------------------------
+	 * 4. PREFAB LOADING
+	 * ---------------------------------------------------------
+	 */
+
+	/**
+	 * Loads a JSON list of tiles into the prefab map.
+	 * Expected JSON Format:
+	 * [
+	 * { "x": 10, "y": 10, "type": 1, "hasTree": true },
+	 * { "x": 10, "y": 11, "type": 2, "rockData": { "hasRock": true, "frame": 1 } }
+	 * ]
+	 */
+	function loadPrefab(json) {
+		// If input is a JSON string, parse it. If it's already an object/array, use it.
+		const data = (typeof json === 'string') ? JSON.parse(json) : json;
+
+		if (Array.isArray(data)) {
+			data.forEach(tile => {
+				if (tile.x !== undefined && tile.y !== undefined) {
+					// Store in Map with "x,y" as the key
+					prefabs.set(getCoordKey(tile.x, tile.y), tile);
+				}
+			});
+		}
+	}
+    /** * ---------------------------------------------------------
+     * MATH: PROJECTION & COORDINATES
+     * ---------------------------------------------------------
+     */
+    function gridToWorld(gx, gy) {
+        return {
+            x: (gx - gy) * (TILE_WIDTH / 2),
+            y: (gx + gy) * (TILE_HEIGHT / 2)
+        };
+    }
+
+    function worldToGrid(wx, wy) {
+        let col = (wx / (TILE_WIDTH/2) + wy / (TILE_HEIGHT/2)) / 2;
+        let row = (wy / (TILE_HEIGHT/2) - wx / (TILE_WIDTH/2)) / 2;
+        return { x: Math.floor(col + 0.5), y: Math.floor(row + 0.5) };
+    }
+
+    function worldToScreen(wx, wy) {
+        return {
+            x: wx - camera.x + (canvas.width / 2),
+            y: wy - camera.y + (canvas.height / 2)
+        };
+    }
+
+    /** * ---------------------------------------------------------
+     * RENDERING PRIMITIVES
+     * ---------------------------------------------------------
+     */
+    function drawPixelPoly(vertices, color) {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(Math.floor(vertices[0].x), Math.floor(vertices[0].y));
+        for(let i=1; i<vertices.length; i++) {
+            ctx.lineTo(Math.floor(vertices[i].x), Math.floor(vertices[i].y));
+        }
+        ctx.closePath();
+        ctx.fill();
+    }
+
+    function drawOutline(vertices, color) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(Math.floor(vertices[0].x)+0.5, Math.floor(vertices[0].y)+0.5);
+        for(let i=1; i<vertices.length; i++) {
+            ctx.lineTo(Math.floor(vertices[i].x)+0.5, Math.floor(vertices[i].y)+0.5);
+        }
+        ctx.closePath();
+        ctx.stroke();
+    }
+
+    function drawSphere(cx, cy, r) {
+        cx = Math.floor(cx); cy = Math.floor(cy);
+        let r2 = r*r;
+        for(let y=-r; y<=r; y++) {
+            for(let x=-r; x<=r; x++) {
+                if(x*x + y*y <= r2) {
+                    if(x < -1 && y < -1) ctx.fillStyle = C_PLAYER_HIGH;
+                    else if(x > 1 || y > 1) ctx.fillStyle = C_PLAYER_SHADE;
+                    else ctx.fillStyle = C_PLAYER_MAIN;
+                    if(x*x + y*y > r2 - r*1.5) ctx.fillStyle = '#000000'; 
+                    ctx.fillRect(cx+x, cy+y, 1, 1);
+                }
+            }
+        }
+    }
+
+    function drawShadow(cx, cy, isWater) {
+        cx = Math.floor(cx); cy = Math.floor(cy);
+        let rx = 6, ry = 2; 
+        ctx.fillStyle = isWater ? 'rgba(0,0,50,.1)' : 'rgba(0,0,0,0.4)';
+        for(let y=-ry; y<=ry; y++) {
+            for(let x=-rx; x<=rx; x++) {
+                if((x*x)/(rx*rx) + (y*y)/(ry*ry) <= 1) {
+                    ctx.fillRect(cx+x, cy+y, 1, 1);
+                }
+            }
+        }
+    }
+
+    /** * ---------------------------------------------------------
+     * CORE SYSTEMS & PATHFINDING
+     * ---------------------------------------------------------
+     */
+    function findPath(sx, sy, ex, ey, isBoat = false) {
+        let open = [{x:sx, y:sy, p:null, g:0, h:0, f:0}];
+        let closed = new Set();
+        let limit = 0; 
+        
+        while(open.length > 0 && limit < 800) { 
+            limit++;
+            open.sort((a,b) => a.f - b.f);
+            let curr = open.shift();
+            
+            if(curr.x === ex && curr.y === ey) {
+                let path = [];
+                while(curr.p) { path.push({x:curr.x, y:curr.y}); curr = curr.p; }
+                return path.reverse();
+            }
+            closed.add(`${curr.x},${curr.y}`);
+            const dirs = [{x:0, y:-1}, {x:0, y:1}, {x:-1, y:0}, {x:1, y:0}];
+            for(let d of dirs) {
+                let nx = curr.x + d.x, ny = curr.y + d.y;
+                let isW = isWater(nx, ny);
+                
+                if (isBoat) {
+                    if (!isW) continue;
+                } else {
+                    if (isW || getTreeAt(nx, ny) || getBigRockAt(nx, ny) || (worldObjects[`${nx},${ny}`] && worldObjects[`${nx},${ny}`].type !== 'boat')) continue;
+                }
+
+                if (closed.has(`${nx},${ny}`)) continue;
+
+                let g = curr.g + 1;
+                let dx1 = nx - ex, dy1 = ny - ey;
+                let dx2 = sx - ex, dy2 = sy - ey;
+                let cross = Math.abs(dx1 * dy2 - dx2 * dy1);
+                let h = Math.abs(nx-ex) + Math.abs(ny-ey) + (cross * 0.001);
+                let existing = open.find(n => n.x === nx && n.y === ny);
+                if(existing && existing.g <= g) continue;
+                if(existing) { existing.g = g; existing.f = g+h; existing.p = curr; }
+                else open.push({x:nx, y:ny, p:curr, g:g, h:h, f:g+h});
+            }
+        }
+        return [];
+    }
+    
+    // Inventory & Selection Keybinds
+    window.addEventListener('keydown', e => {
+        let k = e.key.toLowerCase();
+        if (k === 'e' || k === 'i') {
+            inventory.open = !inventory.open;
+            if(!inventory.open && inventory.dragItem) {
+                inventory.slots[inventory.dragIndex] = inventory.dragItem;
+                inventory.dragItem = null;
+                inventory.dragIndex = -1;
+            }
+        }
+        if (e.key >= '1' && e.key <= '8') {
+            inventory.selected = parseInt(e.key) - 1;
+        }
+    });
+    
+    window.addEventListener('wheel', e => {
+        if (e.deltaY > 0) {
+            inventory.selected = (inventory.selected + 1) % HOTBAR_SLOTS;
+        } else {
+            inventory.selected = (inventory.selected - 1 + HOTBAR_SLOTS) % HOTBAR_SLOTS;
+        }
+    });
+
+    // --- MOUSE INPUT HANDLING ---
+    window.addEventListener('mousemove', e => {
+        let rect = canvas.getBoundingClientRect();
+        let s = canvas.width / rect.width;
+        mouse.x = (e.clientX - rect.left) * s;
+        mouse.y = (e.clientY - rect.top) * s;
+    });
+
+    window.addEventListener('mouseup', e => {
+        mouse.down = false;
+        if (inventory.dragItem) {
+            let slotIndex = getSlotUnderMouse(mouse.x, mouse.y);
+            if (slotIndex !== -1) {
+                let targetItem = inventory.slots[slotIndex];
+                if (targetItem) {
+                    if (targetItem.type === inventory.dragItem.type) {
+                        targetItem.count += inventory.dragItem.count;
+                        inventory.dragItem = null; 
+                    } else {
+                        inventory.slots[slotIndex] = inventory.dragItem;
+                        inventory.slots[inventory.dragIndex] = targetItem;
+                    }
+                } else {
+                    inventory.slots[slotIndex] = inventory.dragItem;
+                }
+            } else {
+                inventory.slots[inventory.dragIndex] = inventory.dragItem;
+            }
+            inventory.dragItem = null;
+            inventory.dragIndex = -1;
+        }
+    });
+
+    // --- BUILDING HELPER FUNCTIONS ---
+    function isBuildable(type) {
+        if (type === 'boat') return true;
+        if (type === 'generator') return true;
+        return false;
+    }
+
+    function canBuildOn(type, x, y) {
+        let key = `${x},${y}`;
+        if (worldObjects[key]) return false; 
+
+        if (type === 'boat') {
+            return isWater(x, y);
+        } else {
+            if (isWater(x, y)) return false;
+            if (getTreeAt(x, y)) return false;
+            if (getBigRockAt(x, y)) return false;
+            if (getRockAt(x, y)) return false;
+            return true;
+        }
+    }
+
+    canvas.addEventListener('mousedown', e => {
+        mouse.down = true;
+        
+        // 1. Crafting
+        if (inventory.open) {
+            let cols = 8;
+            let gw = cols * (SLOT_SIZE + SLOT_PADDING) - SLOT_PADDING;
+            let gx = (canvas.width - gw) / 2;
+            let gy = (canvas.height - ((SLOT_SIZE + SLOT_PADDING) * 4)) / 2;
+            let craftX = gx - 80; 
+            let renderIndex = 0; // NEW: Render Index for stacking
+            
+            for(let i=0; i<RECIPES.length; i++) {
+                if (!RECIPES[i].unlocked) continue; // Skip locked
+                
+                let y = gy + renderIndex * (SLOT_SIZE + SLOT_PADDING); // Use renderIndex for Y
+                
+                if (mouse.x >= craftX && mouse.x <= craftX + SLOT_SIZE &&
+                    mouse.y >= y && mouse.y <= y + SLOT_SIZE) {
+                    let r = RECIPES[i];
+                    if (canCraft(r)) {
+                        craftItem(r);
+                        playSound('audio_test.wav', false, 1.5);
+                    }
+                    return; 
+                }
+                renderIndex++; // Increment visual index only for unlocked
+            }
+        }
+
+        // 2. Inventory Click
+        let slotIndex = getSlotUnderMouse(mouse.x, mouse.y);
+        if (slotIndex !== -1) {
+            if (slotIndex < HOTBAR_SLOTS) inventory.selected = slotIndex;
+            if (inventory.open || inventory.slots[slotIndex]) { 
+                 if (inventory.slots[slotIndex]) {
+                    inventory.dragItem = inventory.slots[slotIndex];
+                    inventory.dragIndex = slotIndex;
+                    inventory.slots[slotIndex] = null;
+                }
+            }
+            return;
+        }
+
+        if(inventory.open) return; 
+        
+        // --- GAMEPLAY INTERACTION ---
+        if (!hoveredGrid) return;
+        
+        let gridPos = hoveredGrid;
+        let selItem = inventory.slots[inventory.selected];
+        
+        // A. BUILDING
+        if (!player.inBoat && selItem && isBuildable(selItem.type)) {
+            if (canBuildOn(selItem.type, gridPos.x, gridPos.y)) {
+                worldObjects[`${gridPos.x},${gridPos.y}`] = { type: selItem.type };
+                selItem.count--;
+                if(selItem.count <= 0) inventory.slots[inventory.selected] = null;
+                playSound('audio_test.wav', false, 2.0); 
+                // QUEST CHECK FOR BUILDING GENERATOR (UPDATED TO 'PLACE')
+                if (selItem.type === 'generator') checkQuestProgress('place', 'generator', 1);
+            } else {
+                playSound('audio_smack.wav', false, 0.4);
+            }
+            return; 
+        }
+	  
+        // B. MOUNTING BOAT
+        let objAt = worldObjects[`${gridPos.x},${gridPos.y}`];
+        if (!player.inBoat && objAt && objAt.type === 'boat') {
+            let access = getAdjacentAccess(gridPos.x, gridPos.y, false); 
+            if (access) {
+                let p = findPath(player.gridX, player.gridY, access.x, access.y, false);
+                if (p.length || (player.gridX===access.x && player.gridY===access.y)) {
+                    player.path = p;
+                    player.pendingAction = { type: 'mount', x: gridPos.x, y: gridPos.y };
+                }
+            }
+            return;
+        }
+
+        // C. DISMOUNTING BOAT
+        if (player.inBoat && !isWater(gridPos.x, gridPos.y)) {
+            let access = getAdjacentAccess(gridPos.x, gridPos.y, true); 
+            if (access) {
+                let p = findPath(player.gridX, player.gridY, access.x, access.y, true); 
+                if (p.length || (player.gridX===access.x && player.gridY===access.y)) {
+                    player.path = p;
+                    player.pendingAction = { type: 'dismount', x: gridPos.x, y: gridPos.y };
+                }
+            }
+            return;
+        }
+
+        // D. MOVEMENT / MINING
+        // Check Trees
+        if(getTreeAt(gridPos.x, gridPos.y) && !player.inBoat) {
+		  
+            let dist = Math.abs(player.gridX - gridPos.x) + Math.abs(player.gridY - gridPos.y);
+            if (dist <= 1) {
+			  	
+			  	let hitStrength = 1;
+			  
+               	if (selItem && selItem.type === 'axe') {
+				  	const randomRate = (Math.random() * 0.6) + 0.7;
+				  	playSound('audio_smack.wav',false, randomRate);
+				  	
+				 	hitStrength = 1; 
+				} else {
+                    playSound('audio_smack.wav', false, 0.4); 
+				  	
+				  	hitStrength = .5; 
+                }
+              
+                let key = `${gridPos.x},${gridPos.y}`;
+                if(!treeStates[key]) treeStates[key] = { hits: 0, animStart: 0, spawnedLeaves: false, removed: false };
+                if (treeStates[key].hits < 4) {
+                    treeStates[key].hits += hitStrength;
+                    
+                    if (treeStates[key].hits >= 4) {
+                        treeStates[key].animStart = Date.now();
+                        let treeWorld = gridToWorld(gridPos.x, gridPos.y);
+
+                        let randomInst = Math.floor((Math.random() * 4) + 3);
+                        for(let i=0; i<randomInst; i++) {
+                            let angle = Math.random() * Math.PI * 2;
+                            let dist = Math.random() * 10 + 15; 	
+                        
+                            drops.push({
+                                wait: 1,
+                                type: 'wood',
+                                x: treeWorld.x + Math.cos(angle) * dist,
+                                y: treeWorld.y + Math.sin(angle) * dist,
+                                birth: Date.now() + Math.random() * 500
+                            });
+                        }
+                    }
+                }
+                else if (treeStates[key].hits === 4 && selItem && selItem.type === 'shovel')
+                {
+					ignoreTiles[`${gridPos.x},${gridPos.y}`] = { removed: true };
+                }
+			  
+            } else {
+                let access = getAdjacentAccess(gridPos.x, gridPos.y, false);
+                if (access) {
+                    let p = findPath(player.gridX, player.gridY, access.x, access.y, false);
+                    if(p.length) player.path = p;
+                }
+            }
+        } 
+        // Check Big Rocks
+        else if (getBigRockAt(gridPos.x, gridPos.y) && !player.inBoat) {
+            let dist = Math.abs(player.gridX - gridPos.x) + Math.abs(player.gridY - gridPos.y);
+            if (dist <= 1) {
+                let hitStrength = 0.0;
+			  
+               	if (selItem && selItem.type === 'pickaxe') {
+				  	const randomRate = (Math.random() * 0.4) + 0.6;
+				  	playSound('audio_smack.wav',false, randomRate);
+				  	
+				 	hitStrength = 1; 
+				} else {
+                    playSound('audio_smack.wav', false, 0.5); 
+				  	
+				  	hitStrength = 0.125; 
+                }
+
+                let key = `${gridPos.x},${gridPos.y}`;
+			  	if(!rockStates[key]) rockStates[key] = { hits: 0, animStart: 0, broken: false};
+			  	if (rockStates[key].hits < 4) {
+					rockStates[key].hits += hitStrength;
+					if (rockStates[key].hits >= 4) {
+				  		rockStates[key].animStart = Date.now();
+				  		let wPos = gridToWorld(gridPos.x, gridPos.y);
+
+				  		let randomInst = Math.floor((Math.random() * 4) + 3);
+				  		for(let i=0; i<randomInst; i++) {
+							let angle = Math.random() * Math.PI * 2;
+							let dist = Math.random() * 20 + 15; 
+							drops.push({
+                                wait: 1,
+					  		    type: 'stone',
+					  			x: wPos.x + Math.cos(angle) * dist,
+					  			y: wPos.y + Math.sin(angle) * dist,
+					  			birth: Date.now() + Math.random() * 500
+							});
+				  		}
+					}
+			  	}
+                else if (rockStates[key].hits === 4 && selItem && selItem.type === 'shovel')
+                {
+					ignoreTiles[`${gridPos.x},${gridPos.y}`] = { removed: true };
+                }
+
+            } else {
+                // Auto walk to rock
+                let access = getAdjacentAccess(gridPos.x, gridPos.y, false);
+                if (access) {
+                    let p = findPath(player.gridX, player.gridY, access.x, access.y, false);
+                    if(p.length) player.path = p;
+                }
+            }
+        } 
+        else {
+            if (!isWater(gridPos.x, gridPos.y)) {
+                let dist = Math.abs(player.gridX - gridPos.x) + Math.abs(player.gridY - gridPos.y);
+                if (dist <= 1) {
+                    let key = `${gridPos.x},${gridPos.y}`;
+                    if(!tileStates[key]) tileStates[key] = { tilled: false, lifetime: 0, planted: false, seedType: null, animStart: 0, grown: false, timetilled: 0};
+
+                    let biomeID = getTileAt(hoveredGrid.x, hoveredGrid.y); 
+
+					if (selItem && selItem.type === 'hoe' && !tileStates[key].tilled && biomeID === 2) {
+
+						const randomRate = (Math.random() * 0.4) + 0.6;
+						playSound('audio_smack.wav', false, randomRate);
+
+						tileStates[key].timetilled = Date.now();
+						tileStates[key].tilled = true;
+						tileStates[key].planted = false;
+						tileStates[key].seedType = null;
+						tileStates[key].grown = false;
+					  	tileStates[key].lifetime = Math.floor(Math.random() * (30000 - 27000 + 1)) + 27000;
+					}
+                    else if (selItem && selItem.type === 'weatseeds' && tileStates[key].tilled && tileStates[key].planted === false)
+                    {
+                        playSound('audio_test.wav',false, 1.2);
+                        removeItems('weatseeds', 1);
+
+                        tileStates[key].tilled = true ;
+                        tileStates[key].planted = true;
+                        tileStates[key].seedType = 'weatseeds';
+                        tileStates[key].animStart = Date.now();
+                    }
+                    else if (selItem && selItem.type === 'hoe' && tileStates[key].grown)
+                    {
+                        tileStates[key].timetilled = Date.now();
+                        tileStates[key].tilled = true;
+                        tileStates[key].planted = false;
+                        tileStates[key].seedType = null;
+                        tileStates[key].grown = false;
+
+                        let wPos = gridToWorld(gridPos.x, gridPos.y);
+                        let randomInst = Math.floor((Math.random() * 4) + 3);
+
+				  		for(let i=0; i<randomInst; i++) {
+							let angle = Math.random() * Math.PI * 2;
+							let dist = Math.random() * 20 + 15; 
+							drops.push({
+                                wait: 1,
+					  		    type: 'weat',
+					  			x: wPos.x + Math.cos(angle) * dist,
+					  			y: wPos.y + Math.sin(angle) * dist,
+					  			birth: Date.now() + Math.random() * 500
+							});
+				  		}
+                        randomInst = Math.floor((Math.random() * 2) + 1);
+                        for(let i=0; i<randomInst; i++) {
+							let angle = Math.random() * Math.PI * 2;
+							let dist = Math.random() * 20 + 15; 
+							drops.push({
+                                wait: 1,
+					  		    type: 'weatseeds',
+					  			x: wPos.x + Math.cos(angle) * dist,
+					  			y: wPos.y + Math.sin(angle) * dist,
+					  			birth: Date.now() + Math.random() * 500
+							});
+				  		}
+                    }
+                } 
+            }
+
+            let validMove = player.inBoat ? isWater(gridPos.x, gridPos.y) : !isWater(gridPos.x, gridPos.y);
+            if(validMove) {
+                let p = findPath(player.gridX, player.gridY, gridPos.x, gridPos.y, player.inBoat);
+                if(p.length) player.path = p;
+            }
+        }   
+    });
+
+    function getAdjacentAccess(tx, ty, findWater) {
+        const dirs = [{x:0, y:-1}, {x:0, y:1}, {x:-1, y:0}, {x:1, y:0}];
+        let best = null;
+        let minD = Infinity;
+        
+        for (let d of dirs) {
+            let nx = tx + d.x, ny = ty + d.y;
+            let isW = isWater(nx, ny);
+            let valid = findWater ? isW : (!isW && !getTreeAt(nx, ny) && !getBigRockAt(nx, ny) && !worldObjects[`${nx},${ny}`]);
+            
+            if (valid) {
+                let dist = Math.abs(player.gridX - nx) + Math.abs(player.gridY - ny);
+                if (dist < minD) {
+                    minD = dist;
+                    best = {x: nx, y: ny};
+                }
+            }
+        }
+        return best;
+    }
+
+    function isBuildingAdjacent(tx, ty, type) {
+        const dirs = [{x:0, y:-1}, {x:0, y:1}, {x:-1, y:0}, {x:1, y:0}];
+        
+	  	for (let d of dirs) {
+            let nx = tx + d.x, ny = ty + d.y;
+		  	let objAt = worldObjects[`${nx},${ny}`];
+
+            if (objAt && objAt.type === type)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function getSlotUnderMouse(mx, my) {
+        let startX = (canvas.width - (HOTBAR_SLOTS * (SLOT_SIZE + SLOT_PADDING))) / 2;
+        let startY = canvas.height - SLOT_SIZE - 10;
+
+        for(let i=0; i<HOTBAR_SLOTS; i++) {
+            let sx = startX + i * (SLOT_SIZE + SLOT_PADDING);
+            if(mx >= sx && mx <= sx + SLOT_SIZE && my >= startY && my <= startY + SLOT_SIZE) {
+                return i;
+            }
+        }
+        if (inventory.open) {
+            let cols = 8;
+            let gw = (SLOT_SIZE + SLOT_PADDING) * cols;
+            let gh = (SLOT_SIZE + SLOT_PADDING) * 4; 
+            let gx = (canvas.width - gw) / 2;
+            let gy = (canvas.height - gh) / 2;
+            
+            for (let i = 8; i < INV_TOTAL_SLOTS; i++) {
+                let gridIndex = i - 8;
+                let c = gridIndex % cols;
+                let r = Math.floor(gridIndex / cols);
+                let sx = gx + c * (SLOT_SIZE + SLOT_PADDING);
+                let sy = gy + r * (SLOT_SIZE + SLOT_PADDING);
+                
+                if(mx >= sx && mx <= sx + SLOT_SIZE && my >= sy && my <= sy + SLOT_SIZE) {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    }
+    
+    // UPDATED addToInventory to track Quest Progress
+    function addToInventory(type, amount) {
+        let addedAny = false;
+        let remaining = amount;
+        
+        // 1. Fill existing slots
+        for (let i=0; i<INV_TOTAL_SLOTS; i++) {
+            if (inventory.slots[i] && inventory.slots[i].type === type) {
+                inventory.slots[i].count += remaining;
+                checkQuestProgress('gather', type, remaining); // Quest Hook
+                remaining = 0;
+                addedAny = true;
+                break;
+            }
+        }
+        // 2. Empty slots
+        if (remaining > 0) {
+            for (let i=0; i<INV_TOTAL_SLOTS; i++) {
+                if (inventory.slots[i] === null) {
+                    inventory.slots[i] = { type: type, count: remaining };
+                    checkQuestProgress('gather', type, remaining); // Quest Hook
+                    remaining = 0;
+                    addedAny = true;
+                    break;
+                }
+            }
+        }
+        return addedAny;
+    }
+
+    function countItem(type) {
+        let total = 0;
+        for(let s of inventory.slots) if(s && s.type === type) total += s.count;
+        return total;
+    }
+
+    function canCraft(recipe) {
+        if(!recipe.unlocked) return false; // Lock check
+        for (let r of recipe.req) {
+            if (countItem(r.type) < r.count) return false;
+        }
+        return true;
+    }
+
+    function removeItems(type, amount) {
+        let left = amount;
+        for(let i=0; i<inventory.slots.length; i++) {
+            if(inventory.slots[i] && inventory.slots[i].type === type) {
+                if(inventory.slots[i].count > left) {
+                    inventory.slots[i].count -= left;
+                    return;
+                } else if (inventory.slots[i].count === left) {
+                    inventory.slots[i] = null;
+                    return;
+                } else {
+                    left -= inventory.slots[i].count;
+                    inventory.slots[i] = null;
+                }
+            }
+        }
+    }
+
+    function craftItem(recipe) {
+        if (!canCraft(recipe)) return;
+        for(let r of recipe.req) removeItems(r.type, r.count);
+        addToInventory(recipe.type, recipe.outCount);
+        checkQuestProgress('craft', recipe.type, 1); // Quest Hook
+    }
+  
+    function update() {
+        let pScreen = worldToScreen(player.worldX, player.worldY);
+        let accelX = 0, accelY = 0;
+        
+        let marginX = camera.panningX ? CAM_STOP_MARGIN * 16 : CAM_TRIGGER_MARGIN * 16;
+        if (pScreen.x < marginX) { accelX = -CAM_ACCEL; camera.panningX = true; } 
+        else if (pScreen.x > canvas.width - marginX) { accelX = CAM_ACCEL;  camera.panningX = true; } 
+        else { camera.panningX = false; }
+
+        let marginY = camera.panningY ? CAM_STOP_MARGIN * 9 : CAM_TRIGGER_MARGIN * 9;
+        if (pScreen.y < marginY) { accelY = -CAM_ACCEL; camera.panningY = true; } 
+        else if (pScreen.y > canvas.height - marginY) { accelY = CAM_ACCEL; camera.panningY = true; } 
+        else { camera.panningY = false; }
+
+        camera.vx += accelX; camera.vy += accelY;
+        let speed = Math.sqrt(camera.vx*camera.vx + camera.vy*camera.vy);
+        if(speed > CAM_MAX_SPEED) {
+            camera.vx = (camera.vx/speed) * CAM_MAX_SPEED;
+            camera.vy = (camera.vy/speed) * CAM_MAX_SPEED;
+        }
+
+        camera.vx *= CAM_FRICTION; camera.vy *= CAM_FRICTION;
+        if(Math.abs(camera.vx) < 0.01) camera.vx = 0;
+        if(Math.abs(camera.vy) < 0.01) camera.vy = 0;
+
+        camera.x += camera.vx; camera.y += camera.vy;
+
+        if(player.path.length > 0) {
+            let next = player.path[0];
+            let nextWorld = gridToWorld(next.x, next.y);
+            let dx = nextWorld.x - player.worldX;
+            let dy = nextWorld.y - player.worldY;
+            let dist = Math.sqrt(dx*dx + dy*dy);
+            if(dist < player.speed) {
+                player.worldX = nextWorld.x; player.worldY = nextWorld.y;
+                player.gridX = next.x; player.gridY = next.y;
+                player.path.shift();
+            } else {
+                player.worldX += (dx/dist) * player.speed;
+                player.worldY += (dy/dist) * player.speed;
+            }
+        } 
+        else if (player.pendingAction) {
+            let act = player.pendingAction;
+            if (act.type === 'mount') {
+                delete worldObjects[`${act.x},${act.y}`];
+                player.inBoat = true;
+                player.gridX = act.x; player.gridY = act.y;
+                let pos = gridToWorld(act.x, act.y);
+                player.worldX = pos.x; player.worldY = pos.y;
+                playSound('audio_test.wav', false, 0.5); 
+            }
+            else if (act.type === 'dismount') {
+                worldObjects[`${player.gridX},${player.gridY}`] = { type: 'boat' };
+                player.inBoat = false;
+                player.gridX = act.x; player.gridY = act.y;
+                let pos = gridToWorld(act.x, act.y);
+                player.worldX = pos.x; player.worldY = pos.y;
+                playSound('audio_test.wav', false, 0.5);
+            }
+            player.pendingAction = null;
+        }
+
+        if (isBuildingAdjacent(player.gridX, player.gridY, 'generator'))
+        {
+            RegenerateEnergy();
+        }
+	  
+		const centerPos = { 
+			x: player.gridX, 
+			y: player.gridY 
+		};
+	  
+		const miniMapScreenPos = { 
+		  x: 640 - 90, 
+		  y: 360 - 90 
+		};
+
+		// C. Call the function
+		drawMiniMap(ctx, miniMapScreenPos, centerPos);
+	          
+        for (let i = drops.length - 1; i >= 0; i--) {
+            let d = drops[i];
+            let dx = player.worldX - d.x;
+            let dy = player.worldY - d.y;
+            let distToPlayer = Math.sqrt(dx*dx + dy*dy);
+
+            if (d.wait > 0 && distToPlayer > 5)
+            {
+                d.wait -= .02;
+            }
+            else
+            {
+                d.wait = 0;
+
+                if (distToPlayer < 80 && !player.inBoat) {
+                    let moveSpeed = 1.5;
+                    d.x += (dx / distToPlayer) * moveSpeed;
+                    d.y += (dy / distToPlayer) * moveSpeed;
+                    
+                    if (distToPlayer < 10) {
+                        const randomRate = (Math.random() * 0.6) + 0.7;
+                        playSound('audio_test.wav', false, randomRate);
+                        let itemType = d.type;
+                        let added = addToInventory(itemType, 1);
+                        if (added) drops.splice(i, 1);
+                    }
+                }
+            }
+        }
+
+        for (let i = particles.length - 1; i >= 0; i--) {
+            let p = particles[i];
+            if (p.z > 0) {
+                p.vz -= 0.05; 
+                p.x += p.vx;
+                p.y += p.vy;
+                p.z += p.vz;
+                p.rot += p.rotSpeed;
+                if (p.z <= 0) {
+                    p.z = 0;
+                    p.landed = true;
+                }
+            } else {
+                p.life -= 0.005; 
+                if (p.life <= 0) particles.splice(i, 1);
+            }
+        }
+
+        // --- QUEST UPDATES ---
+        for (let i = activeQuests.length - 1; i >= 0; i--) {
+            let q = activeQuests[i];
+            if(q.state === 'fading') {
+                q.fade -= 0.02; // Fade out speed
+                if(q.fade <= 0) {
+                    activeQuests.splice(i, 1); // Remove to realign UI
+                }
+            }
+        }
+        for(let i = questNotifications.length - 1; i >= 0; i--) {
+            questNotifications[i].life--;
+            if(questNotifications[i].life <= 0) questNotifications.splice(i, 1);
+        }
+    }
+    
+    function playSound(filename, loop = false, playbackRate) {
+        const soundPath = `./assets/sounds/${filename}`;
+        const audio = new Audio(soundPath);
+        audio.loop = loop;
+        audio.preservesPitch = false;
+        audio.mozPreservesPitch = false;    
+        audio.webkitPreservesPitch = false; 
+        if (playbackRate) audio.playbackRate = playbackRate;
+        return audio;
+    }
+
+    function draw() {
+        ctx.fillStyle = '#87CEEB';
+        ctx.fillRect(0,0,canvas.width, canvas.height);
+        let time = Date.now() * 0.003;
+        
+        let bounce = Math.floor(Math.sin(time)*2);
+        
+        let camGrid = worldToGrid(camera.x, camera.y);
+        let renderList = [];
+        hoveredGrid = null; 
+        
+        // ZOOM TRANSFORMATION START
+        ctx.save();
+        ctx.translate(canvas.width/2, canvas.height/2);
+        ctx.scale(ZOOM_LEVEL, ZOOM_LEVEL);
+        ctx.translate(-canvas.width/2, -canvas.height/2);
+
+        // Adjust mouse for hit testing within the zoomed world
+        // (mx - cw/2) = (screen_mx - cw/2) / zoom
+        let zMouseX = (mouse.x - canvas.width/2) / ZOOM_LEVEL + canvas.width/2;
+        let zMouseY = (mouse.y - canvas.height/2) / ZOOM_LEVEL + canvas.height/2;
+        
+        for(let x = camGrid.x - RENDER_DISTANCE; x <= camGrid.x + RENDER_DISTANCE; x++) {
+			for(let y = camGrid.y - RENDER_DISTANCE; y <= camGrid.y + RENDER_DISTANCE; y++) {
+
+				// 1. Get Positions
+				let wPos = gridToWorld(x, y);
+				let sPos = worldToScreen(wPos.x, wPos.y);
+
+				// 2. Bounds Check (Optimization)
+				if (sPos.x < -100 || sPos.x > canvas.width + 100 || sPos.y < -100 || sPos.y > canvas.height + 100) continue;
+
+				// 3. GET THE BIOME ID (0=Water, 1=Sand, 2=Grass, etc.)
+				let tileID = getTileAt(x, y); 
+
+				let sum = x + y;
+
+				// 4. Push the SPECIFIC tileID to the list, not just isWater
+				renderList.push({
+					type: 'tile', 
+					x, y, 
+					sPos, 
+					sum: sum, 
+					priority: .5, 
+					tileID: tileID // <--- THIS IS THE KEY CHANGE
+				});
+
+				// 5. Check Objects (Only if not water)
+				// assuming ID 0 is Water, we skip object generation for ID 0
+				if(tileID !== 0) { 
+
+					// Rock Check
+					let rockData = getRockAt(x, y);
+					if(rockData) {
+						renderList.push({type: 'rock', x, y, sPos, sum: sum, priority: 1, frame: rockData.frame});
+					}
+
+					// Tree Check
+					if(getTreeAt(x, y)) {
+						renderList.push({type: 'tree', x, y, sPos, sum: sum, priority: 2});
+					}
+
+					// Big Rock Check
+					if(getBigRockAt(x, y)) {
+						renderList.push({type: 'big_rock', x, y, sPos, sum: sum, priority: 2});
+					}
+				}
+			}
+		}
+        
+        for (let key in worldObjects) {
+            let obj = worldObjects[key];
+            let parts = key.split(',');
+            let ox = parseInt(parts[0]);
+            let oy = parseInt(parts[1]);
+            let wPos = gridToWorld(ox, oy);
+            let sPos = worldToScreen(wPos.x, wPos.y);
+            let sum = ox + oy;
+            renderList.push({ type: 'structure', subtype: obj.type, x: ox, y: oy, sPos: sPos, sum: sum, priority: 1.5 });
+        }
+
+        for (let d of drops) {
+            let dGrid = worldToGrid(d.x, d.y);
+            let sum = Math.floor(dGrid.x + 0.5) + Math.floor(dGrid.y + 0.5);
+            let sPos = worldToScreen(d.x, d.y);
+            renderList.push({ type: 'drop', obj: d, sPos: sPos, sum: sum, priority: 4 });
+        }
+
+        let pGridPos = worldToGrid(player.worldX, player.worldY);
+        let pSortSum = Math.floor(pGridPos.x + 0.5) + Math.floor(pGridPos.y + 0.5);
+        let pScreen = worldToScreen(player.worldX, player.worldY);
+        renderList.push({ type: 'player', sPos: pScreen, sum: pSortSum, priority: 3 });
+
+        for (let p of particles) {
+            let pGrid = worldToGrid(p.x, p.y);
+            let sum = Math.floor(pGrid.x + 0.5) + Math.floor(pGrid.y + 0.5);
+            let sPos = worldToScreen(p.x, p.y);
+            renderList.push({ type: 'particle', obj: p, sPos: sPos, sum: sum, priority: 2 });
+        }
+        
+        renderList.sort((a,b) => {
+            if (a.sum !== b.sum) return a.sum - b.sum;
+            return a.priority - b.priority;
+        });
+        
+        for(let item of renderList) {
+
+            if (item.type === 'tile') {
+                let sx = item.sPos.x, sy = item.sPos.y;
+                let drawY = sy;
+                
+                if (item.tileID === 0) {
+                    drawY = sy + GRASS_HEIGHT + bounce;
+                    drawTileTop(sx, drawY, C_WATER, null);
+                    let nNorth = getTileAt(item.x, item.y - 1) === 1; 
+                    let nWest  = getTileAt(item.x - 1, item.y) === 1; 
+                    if (nNorth || nWest) drawShoreFoam(sx, drawY, nNorth, nWest);
+                } else {
+                    let key = `${item.x},${item.y}`;
+                    let state = tileStates[key] || { tilled: false};
+
+                    let rightWater = getTileAt(item.x+1, item.y) === 0;
+                    let leftWater = getTileAt(item.x, item.y+1) === 0;
+                    if(rightWater) drawSideFace(sx, sy, GRASS_HEIGHT+3, true, C_DIRT_DARK);
+                    if(leftWater)  drawSideFace(sx, sy, GRASS_HEIGHT+3, false, C_DIRT);
+
+                    if (state.tilled === false) {
+						// --- NEW BIOME SELECTION LOGIC ---
+						let groundImg = imgTile; // Default (Grass/ID 2)
+					  	
+					  	drawPixelText(item.tileID, 1, 16);
+
+						if      (item.tileID === 1) groundImg = imgSand;
+						else if (item.tileID === 3) groundImg = imgForest;
+						else if (item.tileID === 4) groundImg = imgRockGround;
+
+						//if (groundImg && groundImg.complete) {
+							ctx.drawImage(groundImg, Math.floor(sx - 16), Math.floor(sy - 16), 32, 32);
+                    }
+                    else if (state.planted)
+                    { 
+                        let growStep = 3;
+
+                        if (!state.grown) {
+                            let animTime = Date.now() - state.animStart;
+                            let speed = 10000;
+                            growStep = Math.floor(animTime / speed);
+
+                            if(growStep >= 3) { state.grown = true; growStep = 3; }
+                        }
+                        
+                        if (imgWeat.complete) {
+                            drawImgShadow(imgWeat, growStep * 32, item, -16, -16, 32, 32);
+
+                            ctx.drawImage(imgWeat, growStep * 32, 0, 32, 32, Math.floor(sx - 16), Math.floor(sy - 16), 32, 32);
+                        }
+                    }
+                    else
+                    {
+                        let startTime = state.timetilled;
+                        let timerDuration = state.lifetime;
+                        let timer = true;
+
+                        if (timer) {
+                            if (Date.now() - startTime < timerDuration) {
+                                // Timer is still going
+                                ctx.drawImage(imgTilledTile, Math.floor(sx - 16), Math.floor(sy - 16), 32, 32);
+                            } else {
+                                // Timer is out
+                                timer = false;
+                                state.tilled = false;
+                            }
+                        }
+                    }
+                }
+
+                // USE zMouse for HIT TEST
+                let dx = Math.abs(zMouseX - sx);
+                let dy = Math.abs(zMouseY - drawY);
+                if (dx / 16 + dy / 8 <= 1) {
+                    hoveredGrid = { x: item.x, y: item.y };
+                }
+            } 
+            else if (item.type === 'structure') {
+                if (item.subtype === 'boat' && imgBoat.complete) {
+                    ctx.drawImage(imgBoat, item.sPos.x - 16, item.sPos.y - 16 + GRASS_HEIGHT + bounce, 32, 32);
+                }
+                if (item.subtype === 'generator' && imgBuilding.complete) {
+                    ctx.drawImage(imgBuilding, item.sPos.x - 16, item.sPos.y - 24, 32, 32);
+                }
+            }
+            else if (item.type === 'rock') {
+                let sx = item.sPos.x, sy = item.sPos.y;
+
+                if (imgRocks.complete) {
+                    ctx.drawImage(imgRocks, item.frame * 32, 0, 32, 32, Math.floor(sx - 16), Math.floor(sy - 24), 32, 32);
+                }
+            }
+            else if (item.type === 'drop') {
+                drawShadow(item.sPos.x, item.sPos.y, false);
+                let bob = Math.sin((Date.now() - item.obj.birth) * 0.005) * 4;
+                let dropImg = imgWood;
+                if      (item.obj.type === 'stone' && imgStone.complete)            dropImg = imgStone;
+                else if (item.obj.type === 'wood' && imgWood.complete)              dropImg = imgWood;
+                else if (item.obj.type === 'weat' && imgWeatIcon.complete)          dropImg = imgWeatIcon;
+                else if (item.obj.type === 'weatseeds' && imgWeatSeeds.complete)    dropImg = imgWeatSeeds;
+                
+                if (dropImg.complete) {
+                    let sx = (item.obj.type === 'stone') ? 0 : 0; 
+                    ctx.drawImage(dropImg, sx, 0, 32, 32, Math.floor(item.sPos.x - 4), Math.floor(item.sPos.y - 16 + bob), 32, 32);
+                }
+            }
+            else if (item.type === 'tree') {
+                
+                let key = `${item.x},${item.y}`;
+                let state = treeStates[key] || { hits: 0, spawnedLeaves: false };
+                let frame = Math.floor(state.hits);
+                if (state.hits >= 4) {
+                    let animTime = Date.now() - state.animStart;
+                    let speed = 100;
+                    let pauseDuration = 2000; 
+                    let fallStep = Math.floor(animTime / speed);
+                    if (fallStep < 4) frame = 4 + fallStep;
+                    else {
+                        let timeSinceFallEnded = animTime - (speed * 4);
+                        if (timeSinceFallEnded < pauseDuration) frame = 7; 
+                        else {
+                            frame = 8; 
+                            if (!state.spawnedLeaves) {
+                                state.spawnedLeaves = true;
+                                let wPos = gridToWorld(item.x, item.y);
+                                for(let i=0; i<12; i++) {
+                                    particles.push({
+                                        type: 'leaf',
+                                        x: wPos.x + TREE_OFFSET_X + (Math.random() * 16 - 8), 
+                                        y: wPos.y + (Math.random() * 16 - 8),
+                                        z: 4 + Math.random() * 2, 
+                                        vx: (Math.random() - 0.5) * 0.4,
+                                        vy: (Math.random() - 0.5) * 0.4,
+                                        vz: Math.random() * 0.5 + 0.2, 
+                                        rot: Math.random() * 360,
+                                        rotSpeed: (Math.random() - 0.5) * 0.2,
+                                        life: 1.0,
+                                        landed: false
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                if (imgTree.complete) {
+                    drawImgShadow(imgTree, frame * 32, item, -24, -30, 32, 32);
+
+                    ctx.drawImage(imgTree, frame * 32, 0, 32, 32, Math.floor(item.sPos.x-24), Math.floor(item.sPos.y-30), 32, 32);
+                }
+            }
+            else if (item.type === 'big_rock') {
+                let key = `${item.x},${item.y}`;
+                let state = rockStates[key] || { hits: 0, broken: false };
+                let frame =  Math.floor(state.hits); 
+                
+                if (state.hits >= 4) {
+                    let animTime = Date.now() - state.animStart;
+                    let speed = 150; 
+                    let pauseDuration = 1000;
+                    let breakStep = Math.floor(animTime / speed);
+                    if (breakStep < 3) frame = 4 + breakStep;
+                    else {
+                        let timeSinceAnim = animTime - (speed * 3);
+                        if (timeSinceAnim < pauseDuration) frame = 6;
+                        else {
+                            frame = 7;
+                            if (!state.broken) {
+                                state.broken = true;
+                                let wPos = gridToWorld(item.x, item.y);
+                                for(let i=0; i<8; i++) {
+                                    particles.push({
+                                        type: 'rubble',
+                                        x: wPos.x + (Math.random() * 16 - 8), 
+                                        y: wPos.y + (Math.random() * 16 - 8),
+                                        z: 4 + Math.random() * 2, 
+                                        vx: (Math.random() - 0.5) * 1.5, 
+                                        vy: (Math.random() - 0.5) * 1.5,
+                                        vz: Math.random() * 0.5 + 0.5, 
+                                        rot: Math.random() * 360,
+                                        rotSpeed: (Math.random() - 0.5) * 0.4,
+                                        life: 1.0,
+                                        landed: false
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (frame <= 6 && imgBigRock.complete) {
+                    drawImgShadow(imgBigRock, frame * 32, item, -16, -32, 32, 32);
+
+                    ctx.drawImage(imgBigRock, 
+                        frame * 32, 0, 32, 32, 
+                        Math.floor(item.sPos.x - 16), Math.floor(item.sPos.y - 26), 
+                        32, 32
+                    );
+                }
+                else
+                {
+                    ctx.drawImage(imgRocks, (frame-5) * 32, 0, 32, 32, Math.floor(item.sPos.x - 16), Math.floor(item.sPos.y - 24), 32, 32);
+                }
+            }
+            else if (item.type === 'player') {
+                let pPos = item.sPos;
+                let onWater = isWater(player.gridX, player.gridY);
+                drawShadow(pPos.x, pPos.y, onWater);
+                
+                let floatY = pPos.y - PLAYER_FLOAT_BASE + (Math.sin(time*2)*2);
+                if (player.inBoat) {
+                    let boatY = pPos.y - 16 + GRASS_HEIGHT + bounce;
+                    if (imgBoat.complete) {
+                        ctx.drawImage(imgBoat, pPos.x - 16, boatY, 32, 32);
+                    }
+                    floatY = boatY + 6; 
+                }
+                drawSphere(pPos.x, floatY, 6);
+            }
+            else if (item.type === 'particle') {
+                let p = item.obj;
+                if (!p.landed) {
+                      ctx.fillStyle = `rgba(0,0,0,${p.life * 0.2})`;
+                      ctx.fillRect(item.sPos.x, item.sPos.y, 2, 1); 
+                }
+                let drawY = item.sPos.y - p.z;
+                ctx.save();
+                ctx.globalAlpha = p.life;
+                ctx.translate(item.sPos.x, drawY);
+                ctx.rotate(p.rot);
+                
+                if (p.type === 'leaf' && imgLeaf.complete) {
+                    ctx.drawImage(imgLeaf, -4, -4, 4, 4); 
+                } else if (p.type === 'rubble' && imgRocks.complete) {
+                    ctx.drawImage(imgRocks, 0, 0, 32, 32, -8, -8, 16, 16); 
+                }
+                
+                ctx.restore();
+            }
+        }
+
+        let selItem = inventory.slots[inventory.selected];
+        if (hoveredGrid && selItem && isBuildable(selItem.type) && !player.inBoat) {
+            let hPos = gridToWorld(hoveredGrid.x, hoveredGrid.y);
+            let sPos = worldToScreen(hPos.x, hPos.y);
+            let valid = canBuildOn(selItem.type, hoveredGrid.x, hoveredGrid.y);
+            let color = valid ? 'rgba(0, 255, 0, 0.5)' : 'rgba(255, 0, 0, 0.5)';
+            let drawY = sPos.y;
+            if (isWater(hoveredGrid.x, hoveredGrid.y)) drawY += GRASS_HEIGHT + bounce;
+            drawTileTop(sPos.x, drawY, color, null);
+        }
+        
+        // ZOOM TRANSFORMATION END (Before GUI)
+        ctx.restore();
+
+        drawGUI();
+        update();
+        requestAnimationFrame(draw);
+    }
+
+    function drawImgShadow(img, frame, item, ox, oy, sx, sy)
+    {
+        ctx.save();
+        ctx.filter = 'brightness(0)'; 
+        ctx.globalAlpha = 0.3; 
+        ctx.translate(item.sPos.x, item.sPos.y);
+        ctx.scale(1, .5);
+        ctx.transform(1, 0, -0.5, 1, 0, 0); 
+        ctx.drawImage(img, frame, 0, sx, sy, Math.floor(ox), Math.floor(oy), sx, sy);
+        ctx.restore();
+    }
+    
+    function drawSlot(x, y, size, item, color) {
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(x, y, size, size);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x, y, size, size);
+        
+        if (item) {
+            let iconSize = 16; 
+            let offset = Math.floor((size - iconSize) / 2);
+            
+            if(item.type === 'wood' && imgWood.complete) ctx.drawImage(imgWood, x + offset, y + offset, iconSize, iconSize);
+            else if(item.type === 'stone' && imgStone.complete) ctx.drawImage(imgStone, x + offset, y + offset, iconSize, iconSize);
+            else if(item.type === 'weatseeds' && imgWeatSeeds.complete) ctx.drawImage(imgWeatSeeds, x + offset, y + offset, iconSize, iconSize);
+            else if(item.type === 'weat' && imgWeatIcon.complete) ctx.drawImage(imgWeatIcon, x + offset, y + offset, iconSize, iconSize);
+            else if(item.type === 'boat' && imgBoat.complete) ctx.drawImage(imgBoat, x + offset, y + offset, iconSize, iconSize);
+            else if(item.type === 'generator' && imgBuilding.complete) ctx.drawImage(imgBuilding, x + offset, y + offset, iconSize, iconSize);
+            else if(item.type === 'axe' && imgAxe.complete) ctx.drawImage(imgAxe, x + offset, y + offset, iconSize, iconSize);
+            else if(item.type === 'hoe' && imgHoe.complete) ctx.drawImage(imgHoe, x + offset, y + offset, iconSize, iconSize);
+		  	else if(item.type === 'shovel' && imgShovel.complete) ctx.drawImage(imgShovel, x + offset, y + offset, iconSize, iconSize);
+            else if(item.type === 'pickaxe' && imgPickaxe.complete) ctx.drawImage(imgPickaxe, x + offset, y + offset, iconSize, iconSize);
+            
+            if (item.count > 1) {
+                drawPixelText(item.count, x + 2, y + size - 7, '#fff', 1);
+            }
+        }
+    }
+
+    function drawEnergyBar(fillAmount) {
+        let size = {x: 150, y: 15}
+        let pos  = {x: 4, y: canvas.height - size.y - 10}
+        let color = '#fff'
+
+        if (fillAmount < 0) {
+            return;
+        }
+
+        // Backround
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(pos.x, pos.y, size.x, size.y);
+
+        // Fill
+        if (fillAmount > .25) {
+            ctx.fillStyle = `rgba(0,${fillAmount * 255},0,1)`;
+        }
+        else {
+            ctx.fillStyle = 'rgba(120,0,0,1)';
+        }
+        ctx.fillRect(pos.x, pos.y, size.x * fillAmount, size.y);
+
+        // Outline
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(pos.x, pos.y, size.x, size.y);
+    }
+
+
+
+    let energy = 1;
+    let regenerating = false;
+
+    function RegenerateEnergy()
+    {
+        if (energy < 1) {
+            energy += .001;
+        }
+        else 
+        {
+            energy = 1;
+        }
+    } 
+
+    function drawGUI() {
+        if (!regenerating) {    
+            energy -= .0001;
+            if (energy <= 0) {
+                window.gameOver = true;
+            }
+        }
+
+        drawEnergyBar(energy);
+
+        let hotbarW = HOTBAR_SLOTS * (SLOT_SIZE + SLOT_PADDING) - SLOT_PADDING;
+        let hbx = (canvas.width - hotbarW) / 2;
+        let hby = canvas.height - SLOT_SIZE - 10;
+        
+        for(let i=0; i<HOTBAR_SLOTS; i++) {
+            let sx = hbx + i * (SLOT_SIZE + SLOT_PADDING);
+            let item = (inventory.dragIndex === i && inventory.dragItem) ? null : inventory.slots[i];
+            
+            
+            
+            if (i === inventory.selected) {
+                drawSlot(sx, hby, SLOT_SIZE, item, '#ffd700');
+            }
+            else
+            {
+                drawSlot(sx, hby, SLOT_SIZE, item, '#fff');
+            }
+        }
+
+        // --- QUEST UI ---
+        let qx = canvas.width - 160;
+        let qy = 10;
+        
+        // Notifications
+        for (let i = 0; i < questNotifications.length; i++) {
+  			let n = questNotifications[i];
+		  
+            ctx.save();
+            ctx.globalAlpha = 0.8;
+            ctx.fillStyle = `rgba(0,0,0,0.8)`;
+			//ctx.fillRect(canvas.width/2 - 60, canvas.height/4, 120, questNotifications.length * 15);
+			drawPixelText(n.text, canvas.width/2 - n.text.length * 3, canvas.height/4 + 5 + i * 14, '#ffffff', 2);
+            ctx.restore();
+        }
+
+        // Active Quests
+        for (let i = 0; i < activeQuests.length; i++) {
+            let q = activeQuests[i];
+            ctx.save();
+            ctx.globalAlpha = q.fade; 
+            
+            let boxHeight = 40;
+            if(q.type === 'gather_multi') boxHeight = 55;
+
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
+            ctx.fillRect(qx, qy, 150, boxHeight);
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(qx, qy, 150, boxHeight);
+
+            drawPixelText(q.text, qx + 5, qy + 5, '#fff', 2);
+
+            let checkX = qx + 5;
+            let checkY = qy + 20;
+
+            if(q.type === 'craft' || q.type === 'place') {
+                let status = q.state === 'complete' || q.state === 'fading' ? "[x]" : "[ ]";
+                let color = q.state === 'complete' || q.state === 'fading' ? '#0f0' : '#aaa';
+                drawPixelText(`${status} ${q.current}/${q.req}`, checkX, checkY, color, 2);
+            }
+            else if (q.type === 'gather_multi') {
+                q.reqs.forEach((r, idx) => {
+                    let done = r.current >= r.req;
+                    let color = done ? '#0f0' : '#aaa';
+                    let rText = `${r.type.toUpperCase()}: ${r.current}/${r.req}`;
+                    drawPixelText(rText, checkX, checkY + (idx*12), color, 2);
+                });
+            }
+
+            ctx.restore();
+            qy += boxHeight + 5; 
+        }
+
+        if (inventory.open) {
+            let cols = 8;
+            let gw = (SLOT_SIZE + SLOT_PADDING) * cols;
+            let gh = (SLOT_SIZE + SLOT_PADDING) * 4; 
+            let gx = (canvas.width - gw) / 2;
+            let gy = (canvas.height - gh) / 2;
+            
+            ctx.fillStyle = 'rgba(0,0,0,0.85)';
+            ctx.fillRect(gx - 20, gy - 30, gw + 40, gh + 40 + 60); 
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(gx - 20, gy - 30, gw + 40, gh + 40 + 60);
+
+            drawPixelText('INVENTORY', canvas.width/2 - 20, gy - 15, '#fff', 2);
+            
+            for(let i=8; i<INV_TOTAL_SLOTS; i++) {
+                let gridIndex = i - 8;
+                let c = gridIndex % cols;
+                let r = Math.floor(gridIndex / cols);
+                let sx = gx + c * (SLOT_SIZE + SLOT_PADDING);
+                let sy = gy + r * (SLOT_SIZE + SLOT_PADDING);
+                
+                let item = (inventory.dragIndex === i && inventory.dragItem) ? null : inventory.slots[i];
+                drawSlot(sx, sy, SLOT_SIZE, item);
+            }
+            
+            let craftX = gx - 80; 
+            let renderIndex = 0; // NEW: Render Index for stacking
+            
+            for(let i=0; i<RECIPES.length; i++) {
+                let r = RECIPES[i];
+                if (!r.unlocked) continue; 
+
+                let y = gy + renderIndex * (SLOT_SIZE + SLOT_PADDING); // Use renderIndex for Y
+                
+                let craftable = canCraft(r);
+                
+                ctx.fillStyle = craftable ? 'rgba(0,100,0,0.6)' : 'rgba(50,50,50,0.6)';
+                ctx.fillRect(craftX, y, SLOT_SIZE, SLOT_SIZE);
+                ctx.strokeStyle = craftable ? '#4caf50' : '#555';
+                ctx.strokeRect(craftX, y, SLOT_SIZE, SLOT_SIZE);
+                
+                if (r.type === 'boat' && imgBoat.complete) {
+                    ctx.globalAlpha = craftable ? 1.0 : 0.5;
+                    ctx.drawImage(imgBoat, craftX + 4, y + 4, 16, 16);
+                    ctx.globalAlpha = 1.0;
+                }
+                if (r.type === 'generator' && imgBuilding.complete) {
+                    ctx.globalAlpha = craftable ? 1.0 : 0.5;
+                    ctx.drawImage(imgBuilding, craftX + 4, y + 4, 16, 16);
+                    ctx.globalAlpha = 1.0;
+                }
+                else if (r.type === 'axe' && imgAxe.complete) {
+                    ctx.globalAlpha = craftable ? 1.0 : 0.5;
+                    ctx.drawImage(imgAxe, craftX + 4, y + 4, 16, 16);
+                    ctx.globalAlpha = 1.0;
+                }
+                else if (r.type === 'hoe' && imgHoe.complete) {
+                    ctx.globalAlpha = craftable ? 1.0 : 0.5;
+                    ctx.drawImage(imgHoe, craftX + 4, y + 4, 16, 16);
+                    ctx.globalAlpha = 1.0;
+                }
+			  	else if (r.type === 'shovel' && imgShovel.complete) {
+                    ctx.globalAlpha = craftable ? 1.0 : 0.5;
+                    ctx.drawImage(imgShovel, craftX + 4, y + 4, 16, 16);
+                    ctx.globalAlpha = 1.0;
+                }
+                else if (r.type === 'pickaxe' && imgPickaxe.complete) {
+                    ctx.globalAlpha = craftable ? 1.0 : 0.5;
+                    ctx.drawImage(imgPickaxe, craftX + 4, y + 4, 16, 16);
+                    ctx.globalAlpha = 1.0;
+                }
+                
+                if (mouse.x >= craftX && mouse.x <= craftX + SLOT_SIZE &&
+                    mouse.y >= y && mouse.y <= y + SLOT_SIZE) {
+                    
+                    let tipX = craftX - 70;
+                    ctx.fillStyle = 'rgba(0,0,0,0.9)';
+                    ctx.fillRect(tipX, y, 65, 12 + r.req.length * 12);
+                    drawPixelText(r.name, tipX + 4, y + 4, '#fff', 1);
+
+                    for (let i = 0; i < r.req.length; i++) {
+                        let reqText = `${r.req[i].type.substr(0,1).toUpperCase()}${r.req[i].type.substr(1)}:${r.req[i].count}`;
+                        drawPixelText(reqText, tipX + 4, y + 14 + (i * 12), '#aaa', 1);
+                    }
+                }
+                renderIndex++; // Increment visual index only for unlocked
+            }
+        }
+
+        if (inventory.dragItem) {
+            let size = SLOT_SIZE;
+            let iconSize = 16; 
+            let dx = mouse.x - (iconSize / 2);
+            let dy = mouse.y - (iconSize / 2);
+            
+            let dType = inventory.dragItem.type;
+            if(dType === 'wood' && imgWood.complete) ctx.drawImage(imgWood, dx, dy, iconSize, iconSize);
+            else if(dType === 'stone' && imgStone.complete) ctx.drawImage(imgStone, dx, dy, 32, 32, dx, dy, iconSize, iconSize);
+            else if(dType === 'weatseeds' && imgWeatSeeds.complete) ctx.drawImage(imgWeatSeeds, dx, dy, 32, 32, dx, dy, iconSize, iconSize);
+            else if(dType === 'weat' && imgWeatIcon.complete) ctx.drawImage(imgWeatIcon, dx, dy, 32, 32, dx, dy, iconSize, iconSize);
+            else if(dType === 'boat' && imgBoat.complete) ctx.drawImage(imgBoat, dx, dy, iconSize, iconSize);
+            else if(dType === 'generator' && imgBuilding.complete) ctx.drawImage(imgBuilding, dx, dy, 32, 32);
+            else if(dType === 'axe' && imgAxe.complete) ctx.drawImage(imgAxe, dx, dy, iconSize, iconSize);
+            else if(dType === 'hoe' && imgHoe.complete) ctx.drawImage(imgHoe, dx, dy, iconSize, iconSize);
+		  	else if(dType === 'shovel' && imgShovel.complete) ctx.drawImage(imgShovel, dx, dy, iconSize, iconSize);
+            else if(dType === 'pickaxe' && imgPickaxe.complete) ctx.drawImage(imgPickaxe, dx, dy, iconSize, iconSize);
+
+            if (inventory.dragItem.count > 1) {
+                drawPixelText(inventory.dragItem.count, dx + 2, dy + size - 7, '#fff', 1);
+            }
+        }
+    }
+
+    function drawTileTop(cx, cy, color, outline) {
+        let hw = TILE_WIDTH/2, hh = TILE_HEIGHT/2;
+        let v = [{x:cx,y:cy-hh},{x:cx+hw,y:cy},{x:cx,y:cy+hh},{x:cx-hw,y:cy}];
+        drawPixelPoly(v, color);
+        if(outline) drawOutline(v, outline);
+    }
+
+    function drawShoreFoam(cx, cy, nNorth, nWest) {
+        let hw = TILE_WIDTH/2, hh = TILE_HEIGHT/2;
+        ctx.strokeStyle = C_FOAM;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        if (nNorth) { ctx.moveTo(cx, cy - hh + 1); ctx.lineTo(cx + hw - 1, cy); }
+        if (nWest) {
+            if (!nNorth) ctx.beginPath();
+            ctx.moveTo(cx - hw + 1, cy);
+            ctx.lineTo(cx, cy - hh + 1);
+        }
+        ctx.stroke();
+    }
+
+    function drawSideFace(cx, cy, h, isRight, color) {
+        let hw = TILE_WIDTH/2, hh = TILE_HEIGHT/2;
+        let v = isRight ? 
+            [{x:cx+hw,y:cy},{x:cx+hw,y:cy+h},{x:cx,y:cy+hh+h},{x:cx,y:cy+hh}] :
+            [{x:cx,y:cy+hh},{x:cx,y:cy+hh+h},{x:cx-hw,y:cy+h},{x:cx-hw,y:cy}];
+        drawPixelPoly(v, color);
+    }
+    
+    function resetPlayer() {
+        let r = 0;
+        while(true) {
+            for(let x = -r; x<=r; x++) {
+                for(let y = -r; y<=r; y++) {
+                    if(getTileAt(x,y) === 1 && !getTreeAt(x,y)) { 
+                        player.gridX = x; player.gridY = y;
+                        let pos = gridToWorld(x,y);
+                        player.worldX = pos.x; player.worldY = pos.y;
+                        camera.x = pos.x; camera.y = pos.y;
+                        return;
+                    }
+                }
+            }
+            r++;
+        }
+    }
+    
+    const ambientAudio = new Audio('./assets/sounds/audio_ambient.mp3');
+    ambientAudio.loop = true;
+    ambientAudio.volume = 0; 
+
+    const startAudioFade = () => {
+        window.removeEventListener('mousedown', startAudioFade);
+        window.removeEventListener('keydown', startAudioFade);
+
+        ambientAudio.play().then(() => {
+            let fadeInterval = setInterval(() => {
+                if (ambientAudio.volume < 0.05) {
+                    ambientAudio.volume += 0.001; 
+                } else {
+                    ambientAudio.volume = 0.05; 
+                    clearInterval(fadeInterval);
+                }
+            }, 100); 
+            
+        }).catch(e => {
+        });
+    };
+
+    window.addEventListener('mousedown', startAudioFade);
+    window.addEventListener('keydown', startAudioFade);
+  
+    initQuests();
+    resetPlayer();
+    requestAnimationFrame(draw);
+
+</script>
+</body>
+</html>
